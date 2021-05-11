@@ -938,8 +938,14 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
     prng = np.random.RandomState(seed)
 
+    rho_known = None
+
     if rho_start is not None:
         rho = rho_start
+        # add three lines to say what and where is the known part of density
+        rho_known = np.copy(rho_start)
+        rho_known_idx = np.zeros(rho_start.shape,dtype=bool)
+        rho_known_idx[rho_known>rho_known.max()*0.01] = True
         if add_noise is not None:
             rho += prng.random_sample(size=x.shape)*add_noise
     else:
@@ -1030,6 +1036,9 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
         chi = cp.array(chi)
         supportV = cp.array(supportV)
         Imean = cp.array(Imean)
+
+
+
 
     for j in range(steps):
         if abort_event is not None:
@@ -1223,12 +1232,18 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
             support[labeled_support != big_feature] = False
             newrho[~support] = 0
 
-            #reset the support to be the entire grid again
-            #support = np.ones(newrho.shape,dtype=bool)
+            # reset the support to be the entire grid again
+            # support = np.ones(newrho.shape,dtype=bool)
 
             if DENSS_GPU:
                 newrho = cp.array(newrho)
                 support = cp.array(support)
+
+        # resetting known values of rho (rho_known)
+        if rho_known is not None:
+            newrho[rho_known_idx] = rho_known[rho_known_idx]
+            # make sure support/solvent flattening not eliminated
+            support[rho_known_idx] = True        
 
         supportV[j] = mysum(support, DENSS_GPU=DENSS_GPU)*dV
 

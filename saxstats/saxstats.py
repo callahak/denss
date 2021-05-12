@@ -941,6 +941,7 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
     rho_known = None
 
     if rho_start is not None:
+        rho_start*=dV
         rho = rho_start
         # add three lines to say what and where is the known part of density
         rho_known = np.copy(rho_start)

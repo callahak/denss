@@ -827,7 +827,7 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
     limit_dmax_steps=[500], recenter=True, recenter_steps=None,
     recenter_mode="com", positivity=True, extrapolate=True, output="map",
     steps=None, seed=None,
-    flatten_low_density=True, rho_start=None, add_noise=None, shrinkwrap=True,
+    flatten_low_density=True, rho_start=None, rho_known=None, add_noise=None, shrinkwrap=True,
     shrinkwrap_old_method=False,shrinkwrap_sigma_start=3, shrinkwrap_sigma_end=1.5,
     shrinkwrap_sigma_decay=0.99, shrinkwrap_threshold_fraction=0.2,
     shrinkwrap_iter=20, shrinkwrap_minstep=100, chi_end_fraction=0.01,
@@ -938,15 +938,27 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
     prng = np.random.RandomState(seed)
 
-    rho_known = None
+    if rho_known is not None:
+        rho_known *= dV
+        rho_known_idx = np.zeros(rho_known.shape,dtype=bool)
+        rho_known_idx[rho_known>rho_known.max()*0.01] = True
+        # I'm not going to update the support in the beginning
+        # if rho_start isn't given. 
 
     if rho_start is not None:
-        rho_start*=dV
+        rho_start *= dV
         rho = rho_start
+        rho_start_idx = np.zeros(rho_start.shape,dtype=bool)
+        rho_start_idx[rho_start>rho_start.max()*0.01] = True
+        if rho_known is not None:
+            # I want to say if either rho_known or rho_start is occupied it is true.
+            # but it is easier to do it in two statements than to put a compound
+            # boolean inside the brackets.
+            rho_start_idx[rho_start>rho_start.max()*0.01] = True 
+            rho_start_idx[rho_known>rho_known.max()*0.01] = True
         # add three lines to say what and where is the known part of density
-        rho_known = np.copy(rho_start)
-        rho_known_idx = np.zeros(rho_start.shape,dtype=bool)
-        rho_known_idx[rho_known>rho_known.max()*0.01] = True
+        # BUT, I don't think this section should go here. 
+        support[rho_start<rho_start.max()*0.01] = False
         if add_noise is not None:
             rho += prng.random_sample(size=x.shape)*add_noise
     else:
@@ -957,6 +969,7 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
     #calculate the starting shrinkwrap volume as the volume of a sphere
     #of radius Dmax, i.e. much larger than the particle size
     swbyvol = True
+
     swV = V/2.0
     Vsphere_Dover2 = 4./3 * np.pi * (D/2.)**3
     swVend = Vsphere_Dover2
@@ -1245,6 +1258,7 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
             newrho[rho_known_idx] = rho_known[rho_known_idx]
             # make sure support/solvent flattening not eliminated
             support[rho_known_idx] = True        
+
 
         supportV[j] = mysum(support, DENSS_GPU=DENSS_GPU)*dV
 

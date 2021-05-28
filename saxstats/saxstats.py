@@ -940,6 +940,8 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
     if rho_known is not None:
         rho_known *= dV
+        ne_known = np.sum(rho_known, axis=None)
+        print("\n%s electrons found in rho_known"%ne_known)
         rho_known_idx = np.zeros(rho_known.shape,dtype=bool)
         rho_known_idx[rho_known>rho_known.max()*0.01] = True
         # I'm not going to update the support in the beginning
@@ -947,20 +949,41 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
     if rho_start is not None:
         rho_start *= dV
+        ne_start = np.sum(rho_start, axis=None)
+        rho_start *= ne/ne_start
+        ne_start = np.sum(rho_start)  
+        # making two variables for this so I can change one and refer to the original,
+        # this might not be the cleanest solution.
+        ne_start2 = ne_start
+        print("\n%s electrons found in rho_start"%ne_start)
+        
         rho = rho_start
         rho_start_idx = np.zeros(rho_start.shape,dtype=bool)
         rho_start_idx[rho_start>rho_start.max()*0.01] = True
         if rho_known is not None:
-            # I want to say if either rho_known or rho_start is occupied it is true.
-            # but it is easier to do it in two statements than to put a compound
-            # boolean inside the brackets.
-            rho_start_idx[rho_start>rho_start.max()*0.01] = True 
+            # I want to say if either rho_known or rho_start is occupied it is true,
+            # it is easier to do it in two statements than to put a compound boolean in brackets
+            # rho_start_idx[rho_start>rho_start.max()*0.01] = True   # see a few lines above, this is superfluous.
             rho_start_idx[rho_known>rho_known.max()*0.01] = True
-        # add three lines to say what and where is the known part of density
-        # BUT, I don't think this section should go here. 
+            # Additionally, if there is a rho start and a rho_known, 
+            # I want to calculate the number of electrons to search for in B.
+            ne_remains = ne_start2 - ne_known
+            print("There are %s electrons with unknown positions"%ne_remains)
+ 
         support[rho_start<rho_start.max()*0.01] = False
         if add_noise is not None:
             rho += prng.random_sample(size=x.shape)*add_noise
+        # if rho_known is not None:
+            # I need a way to remove rho_known from rho
+            # rho_remains = np.subtract(rho*(ne/ne_start),rho_known)
+            # test_ne_remains = np.sum(rho_remains, axis=None) 
+            # print("Is %s the number of electrons it should have? %s plus noise"%(test_ne_remains,ne_remains))
+            # if test_ne_remains < 0:
+            #     print("Negative electrons in remaining part of the struct, seems like a problem. Exiting.")
+            #     return [ ]
+            # We have a density and a number of electrons in it.
+            # write_mrc(rho_remains/dV, side, fprefix+"remains_init.mrc")
+            # For now, I'm doing shrinkwrap once,  not iteratively.  
     else:
         rho = prng.random_sample(size=x.shape) #- 0.5
 
@@ -1051,8 +1074,8 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
         supportV = cp.array(supportV)
         Imean = cp.array(Imean)
 
-
-
+    if rho_known is not None:
+        support[rho_known_idx] = False
 
     for j in range(steps):
         if abort_event is not None:
@@ -1082,6 +1105,7 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
         rhoprime = myifftn(F, DENSS_GPU=DENSS_GPU)
         rhoprime = rhoprime.real
 
+
         if not DENSS_GPU and j%write_freq == 0:
             if write_xplor_format:
                 write_xplor(rhoprime/dV, side, fprefix+"_current.xplor")
@@ -1101,9 +1125,16 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
         newrho = myzeros(rho.shape, DENSS_GPU=DENSS_GPU)
 
-        #Error Reduction
-        newrho[support] = rhoprime[support]
-        newrho[~support] = 0.0
+        # newrho is now of B
+        if rho_known is not None:
+            newrho = rhoprime-rho_known
+            newrho[~support] = 0
+            newrho[rho_known_idx] = 0
+
+        # Error reduction
+        if rho_known is None:
+            newrho[support] = rhoprime[support]
+            newrho[~support] = 0.0
 
         #enforce positivity by making all negative density points zero.
         if positivity:
@@ -1254,10 +1285,10 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
                 support = cp.array(support)
 
         # resetting known values of rho (rho_known)
-        if rho_known is not None:
-            newrho[rho_known_idx] = rho_known[rho_known_idx]
+        # if rho_known is not None:
+        #     newrho[rho_known_idx] = rho_known[rho_known_idx]
             # make sure support/solvent flattening not eliminated
-            support[rho_known_idx] = True        
+        #    support[rho_known_idx] = True        
 
 
         supportV[j] = mysum(support, DENSS_GPU=DENSS_GPU)*dV
@@ -1275,9 +1306,36 @@ def denss(q, I, sigq, dmax, ne=None, voxel=5., oversampling=3., limit_dmax=False
 
         if j > 101 + shrinkwrap_minstep and mystd(chi[j-100:j], DENSS_GPU=DENSS_GPU) < chi_end_fraction * mymean(chi[j-100:j], DENSS_GPU=DENSS_GPU):
             break
+        if rho_known is not None:
+            rho = newrho+rho_known
+        if rho_known is None:
+            rho = newrho
+    #outside loop
+    if rho_known is not None:
+        write_mrc(rho/dV, side, "rho.mrc")
+        write_mrc(newrho/dV, side, "newrho.mrc")
+        write_mrc(rho_known/dV, side, "rho_known.mrc")
+    # Now outside of loop over steps, structure should be decent. AB-A to get B.
+    # rho_remains = np.subtract(rho,rho_known)
+    # test_rhoe = np.sum(rho, axis=None)
+    # test_rho_known = np.sum(rho_known, axis=None)
+    # print("\n %s electrons in the whole, %s electrons in known part"%(test_rhoe,test_rho_known))
+    # test_ne_remains = np.sum(rho_remains, axis=None)
+    # print("\n Is %s the number of electrons it should have? %s plus noise\n"%(test_ne_remains,ne_remains))
+    # write_mrc(rho_remains/dV, side, fprefix+"remains_firstpass.mrc")
 
-        rho = newrho
-
+    # # Next shrinkwrap on rho_remains
+    # # start with positivity.
+    # netmp = mysum(rho_remains, DENSS_GPU=DENSS_GPU)
+    # rho_remains[rho_remains<0] = 0.0
+    # if mysum(rho_remains,DENSS_GPU=DENSS_GPU) != 0:
+    #     rho_remains *= netmp/mysum(rho_remains,DENSS_GPU=DENSS_GPU)
+    # # skip symmetry, it isn't as important here
+    # # absolutely don't recenter.
+    # # do perform a simplified version of enforcing connectivity.
+    # # sphere radius less than D/2 might not be the 
+    # newrho_remains, supportofremains = shrinkwrap_by_density_value(rho_remains,absv=True, sigma=10.0,threshold=0.2,recenter=False,recenter_mode="max")
+    # write_mrc(newrho_remains/dV, side, fprefix+"remains_aftersw.mrc")
     #convert back to numpy outside of for loop
     if DENSS_GPU:
         rho = cp.asnumpy(rho)
